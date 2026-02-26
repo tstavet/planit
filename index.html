@@ -1,0 +1,1255 @@
+import { useState, useEffect, useRef } from "react";
+
+const STORAGE_KEY = "planpal_plans";
+
+// Warm, editorial aesthetic - think Monocle magazine meets a pocket notebook
+const theme = {
+  bg: "#F7F3EE",
+  card: "#FFFFFF",
+  accent: "#C45D3E",
+  accentLight: "#F0DDD6",
+  text: "#2A2522",
+  textMuted: "#8A817C",
+  border: "#E8E2DA",
+  success: "#5B8A72",
+  successLight: "#E4F0E8",
+  dark: "#2A2522",
+  shadow: "0 2px 12px rgba(42,37,34,0.06)",
+  shadowHover: "0 4px 20px rgba(42,37,34,0.1)",
+};
+
+const categories = [
+  { id: "restaurant", label: "Restaurant", icon: "🍽" },
+  { id: "activity", label: "Activity", icon: "🎯" },
+  { id: "transport", label: "Transport", icon: "🚗" },
+  { id: "hotel", label: "Hotel", icon: "🏨" },
+  { id: "flight", label: "Flight", icon: "✈️" },
+  { id: "drinks", label: "Drinks", icon: "🍸" },
+  { id: "shopping", label: "Shopping", icon: "🛍" },
+  { id: "other", label: "Other", icon: "📌" },
+];
+
+const samplePlans = [
+  {
+    id: "sample-1",
+    title: "Nashville Date Night",
+    date: "2025-03-15",
+    type: "date",
+    shared: true,
+    sharedWith: "Victoria",
+    stops: [
+      {
+        id: "s1",
+        name: "The Catbird Seat",
+        category: "restaurant",
+        time: "7:00 PM",
+        address: "1711 Division St, Nashville, TN",
+        cost: 250,
+        notes: "Reservation under Theodore. 17-course tasting menu. No substitutions.",
+        confirmed: true,
+      },
+      {
+        id: "s2",
+        name: "Attaboy",
+        category: "drinks",
+        time: "9:30 PM",
+        address: "8 Lea Ave, Nashville, TN",
+        cost: 60,
+        notes: "No menu - just tell them what you're in the mood for.",
+        confirmed: true,
+      },
+      {
+        id: "s3",
+        name: "Walk along the Pedestrian Bridge",
+        category: "activity",
+        time: "10:30 PM",
+        address: "Shelby Ave Pedestrian Bridge",
+        cost: 0,
+        notes: "Great skyline views at night.",
+        confirmed: true,
+      },
+    ],
+    budget: 400,
+  },
+];
+
+function generateId() {
+  return Math.random().toString(36).substr(2, 9);
+}
+
+function formatCurrency(amount) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 0,
+  }).format(amount);
+}
+
+function getGoogleMapsUrl(address) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+}
+
+function getDirectionsUrl(from, to) {
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(from)}&destination=${encodeURIComponent(to)}`;
+}
+
+// Shared link simulation (in production, this would be a real backend)
+function getShareLink(planId) {
+  return `${window.location.origin}?plan=${planId}`;
+}
+
+function Modal({ isOpen, onClose, title, children }) {
+  if (!isOpen) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(42,37,34,0.4)",
+        backdropFilter: "blur(4px)",
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: theme.card,
+          borderRadius: 16,
+          width: "90%",
+          maxWidth: 480,
+          maxHeight: "85vh",
+          overflow: "auto",
+          padding: 28,
+          boxShadow: "0 24px 48px rgba(42,37,34,0.15)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 20,
+          }}
+        >
+          <h2
+            style={{
+              fontFamily: "'Playfair Display', Georgia, serif",
+              fontSize: 22,
+              fontWeight: 700,
+              color: theme.text,
+              margin: 0,
+            }}
+          >
+            {title}
+          </h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "none",
+              fontSize: 22,
+              color: theme.textMuted,
+              cursor: "pointer",
+              padding: 4,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StopCard({ stop, index, total, allStops, onEdit, onDelete, onToggleConfirm }) {
+  const cat = categories.find((c) => c.id === stop.category) || categories[7];
+  const prevStop = index > 0 ? allStops[index - 1] : null;
+
+  return (
+    <div style={{ position: "relative" }}>
+      {/* Timeline connector */}
+      {index < total - 1 && (
+        <div
+          style={{
+            position: "absolute",
+            left: 23,
+            top: 52,
+            bottom: -20,
+            width: 2,
+            background: `linear-gradient(to bottom, ${theme.accent}, ${theme.border})`,
+            zIndex: 0,
+          }}
+        />
+      )}
+
+      {/* Directions link between stops */}
+      {prevStop && prevStop.address && stop.address && (
+        <a
+          href={getDirectionsUrl(prevStop.address, stop.address)}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            marginLeft: 46,
+            marginBottom: 8,
+            fontSize: 12,
+            color: theme.accent,
+            textDecoration: "none",
+            fontFamily: "'DM Sans', sans-serif",
+            opacity: 0.8,
+          }}
+        >
+          ↳ Get directions from {prevStop.name}
+        </a>
+      )}
+
+      <div style={{ display: "flex", gap: 14, position: "relative", zIndex: 1 }}>
+        {/* Timeline dot */}
+        <div
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: 14,
+            background: stop.confirmed ? theme.successLight : theme.accentLight,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 22,
+            flexShrink: 0,
+            border: `2px solid ${stop.confirmed ? theme.success : theme.accent}`,
+            transition: "all 0.2s ease",
+          }}
+        >
+          {cat.icon}
+        </div>
+
+        {/* Card */}
+        <div
+          style={{
+            flex: 1,
+            background: theme.card,
+            borderRadius: 14,
+            padding: "16px 18px",
+            boxShadow: theme.shadow,
+            border: `1px solid ${theme.border}`,
+            transition: "box-shadow 0.2s ease",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.boxShadow = theme.shadowHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.boxShadow = theme.shadow)}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              marginBottom: 6,
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  fontFamily: "'Playfair Display', Georgia, serif",
+                  fontSize: 17,
+                  fontWeight: 600,
+                  color: theme.text,
+                }}
+              >
+                {stop.name}
+              </div>
+              {stop.time && (
+                <div
+                  style={{
+                    fontFamily: "'DM Sans', sans-serif",
+                    fontSize: 13,
+                    color: theme.accent,
+                    fontWeight: 600,
+                    marginTop: 2,
+                  }}
+                >
+                  {stop.time}
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button
+                onClick={() => onToggleConfirm(stop.id)}
+                title={stop.confirmed ? "Confirmed" : "Mark confirmed"}
+                style={{
+                  background: stop.confirmed ? theme.success : "transparent",
+                  border: `1.5px solid ${stop.confirmed ? theme.success : theme.border}`,
+                  borderRadius: 8,
+                  width: 30,
+                  height: 30,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  fontSize: 14,
+                  color: stop.confirmed ? "#fff" : theme.textMuted,
+                  transition: "all 0.15s ease",
+                }}
+              >
+                ✓
+              </button>
+              <button
+                onClick={() => onEdit(stop)}
+                style={{
+                  background: "transparent",
+                  border: `1.5px solid ${theme.border}`,
+                  borderRadius: 8,
+                  width: 30,
+                  height: 30,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  fontSize: 13,
+                }}
+              >
+                ✎
+              </button>
+              <button
+                onClick={() => onDelete(stop.id)}
+                style={{
+                  background: "transparent",
+                  border: `1.5px solid ${theme.border}`,
+                  borderRadius: 8,
+                  width: 30,
+                  height: 30,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  color: theme.textMuted,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+
+          {stop.address && (
+            <a
+              href={getGoogleMapsUrl(stop.address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: 13,
+                color: theme.textMuted,
+                textDecoration: "none",
+                marginBottom: 4,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            >
+              <span style={{ fontSize: 12 }}>📍</span> {stop.address}
+            </a>
+          )}
+
+          {stop.notes && (
+            <div
+              style={{
+                fontSize: 13,
+                color: theme.text,
+                background: theme.bg,
+                borderRadius: 8,
+                padding: "8px 10px",
+                marginTop: 8,
+                fontFamily: "'DM Sans', sans-serif",
+                lineHeight: 1.5,
+              }}
+            >
+              {stop.notes}
+            </div>
+          )}
+
+          {stop.cost > 0 && (
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                color: theme.accent,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            >
+              {formatCurrency(stop.cost)}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StopForm({ stop, onSave, onCancel }) {
+  const [form, setForm] = useState(
+    stop || {
+      name: "",
+      category: "restaurant",
+      time: "",
+      address: "",
+      cost: 0,
+      notes: "",
+      confirmed: false,
+    }
+  );
+
+  const inputStyle = {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: `1.5px solid ${theme.border}`,
+    fontFamily: "'DM Sans', sans-serif",
+    fontSize: 14,
+    color: theme.text,
+    background: theme.bg,
+    outline: "none",
+    boxSizing: "border-box",
+    transition: "border-color 0.15s ease",
+  };
+
+  const labelStyle = {
+    fontFamily: "'DM Sans', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: theme.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+    marginBottom: 6,
+    display: "block",
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div>
+        <label style={labelStyle}>Name</label>
+        <input
+          style={inputStyle}
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          placeholder="e.g., The Catbird Seat"
+          onFocus={(e) => (e.target.style.borderColor = theme.accent)}
+          onBlur={(e) => (e.target.style.borderColor = theme.border)}
+        />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <label style={labelStyle}>Category</label>
+          <select
+            style={{ ...inputStyle, cursor: "pointer" }}
+            value={form.category}
+            onChange={(e) => setForm({ ...form, category: e.target.value })}
+          >
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.icon} {c.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Time</label>
+          <input
+            style={inputStyle}
+            value={form.time}
+            onChange={(e) => setForm({ ...form, time: e.target.value })}
+            placeholder="7:00 PM"
+            onFocus={(e) => (e.target.style.borderColor = theme.accent)}
+            onBlur={(e) => (e.target.style.borderColor = theme.border)}
+          />
+        </div>
+      </div>
+
+      <div>
+        <label style={labelStyle}>Address</label>
+        <input
+          style={inputStyle}
+          value={form.address}
+          onChange={(e) => setForm({ ...form, address: e.target.value })}
+          placeholder="Full address for map links"
+          onFocus={(e) => (e.target.style.borderColor = theme.accent)}
+          onBlur={(e) => (e.target.style.borderColor = theme.border)}
+        />
+      </div>
+
+      <div>
+        <label style={labelStyle}>Estimated Cost ($)</label>
+        <input
+          style={inputStyle}
+          type="number"
+          value={form.cost || ""}
+          onChange={(e) => setForm({ ...form, cost: parseFloat(e.target.value) || 0 })}
+          placeholder="0"
+          onFocus={(e) => (e.target.style.borderColor = theme.accent)}
+          onBlur={(e) => (e.target.style.borderColor = theme.border)}
+        />
+      </div>
+
+      <div>
+        <label style={labelStyle}>Notes</label>
+        <textarea
+          style={{ ...inputStyle, minHeight: 70, resize: "vertical" }}
+          value={form.notes}
+          onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          placeholder="Reservation details, outfit notes, parking info..."
+          onFocus={(e) => (e.target.style.borderColor = theme.accent)}
+          onBlur={(e) => (e.target.style.borderColor = theme.border)}
+        />
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+        <button
+          onClick={() =>
+            onSave({ ...form, id: form.id || generateId() })
+          }
+          disabled={!form.name.trim()}
+          style={{
+            flex: 1,
+            padding: "12px 20px",
+            background: form.name.trim() ? theme.accent : theme.border,
+            color: "#fff",
+            border: "none",
+            borderRadius: 10,
+            fontFamily: "'DM Sans', sans-serif",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: form.name.trim() ? "pointer" : "default",
+            transition: "all 0.15s ease",
+          }}
+        >
+          {stop ? "Save Changes" : "Add Stop"}
+        </button>
+        <button
+          onClick={onCancel}
+          style={{
+            padding: "12px 20px",
+            background: "transparent",
+            color: theme.textMuted,
+            border: `1.5px solid ${theme.border}`,
+            borderRadius: 10,
+            fontFamily: "'DM Sans', sans-serif",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlanForm({ plan, onSave, onCancel }) {
+  const [form, setForm] = useState(
+    plan || {
+      title: "",
+      date: "",
+      type: "date",
+      shared: false,
+      sharedWith: "",
+      budget: 0,
+      stops: [],
+    }
+  );
+
+  const inputStyle = {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: `1.5px solid ${theme.border}`,
+    fontFamily: "'DM Sans', sans-serif",
+    fontSize: 14,
+    color: theme.text,
+    background: theme.bg,
+    outline: "none",
+    boxSizing: "border-box",
+  };
+
+  const labelStyle = {
+    fontFamily: "'DM Sans', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: theme.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+    marginBottom: 6,
+    display: "block",
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div>
+        <label style={labelStyle}>Plan Name</label>
+        <input
+          style={inputStyle}
+          value={form.title}
+          onChange={(e) => setForm({ ...form, title: e.target.value })}
+          placeholder="e.g., Anniversary Dinner, Italy Trip Day 1"
+          onFocus={(e) => (e.target.style.borderColor = theme.accent)}
+          onBlur={(e) => (e.target.style.borderColor = theme.border)}
+        />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <label style={labelStyle}>Date</label>
+          <input
+            style={inputStyle}
+            type="date"
+            value={form.date}
+            onChange={(e) => setForm({ ...form, date: e.target.value })}
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>Type</label>
+          <select
+            style={{ ...inputStyle, cursor: "pointer" }}
+            value={form.type}
+            onChange={(e) => setForm({ ...form, type: e.target.value })}
+          >
+            <option value="date">Date Night</option>
+            <option value="trip">Trip</option>
+            <option value="outing">Outing</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label style={labelStyle}>Budget ($)</label>
+        <input
+          style={inputStyle}
+          type="number"
+          value={form.budget || ""}
+          onChange={(e) => setForm({ ...form, budget: parseFloat(e.target.value) || 0 })}
+          placeholder="Optional total budget"
+        />
+      </div>
+
+      <div>
+        <label style={labelStyle}>Share With</label>
+        <input
+          style={inputStyle}
+          value={form.sharedWith}
+          onChange={(e) =>
+            setForm({ ...form, sharedWith: e.target.value, shared: !!e.target.value })
+          }
+          placeholder="Name of who you're sharing with"
+        />
+      </div>
+
+      <button
+        onClick={() => onSave({ ...form, id: form.id || generateId() })}
+        disabled={!form.title.trim()}
+        style={{
+          padding: "12px 20px",
+          background: form.title.trim() ? theme.accent : theme.border,
+          color: "#fff",
+          border: "none",
+          borderRadius: 10,
+          fontFamily: "'DM Sans', sans-serif",
+          fontSize: 14,
+          fontWeight: 600,
+          cursor: form.title.trim() ? "pointer" : "default",
+          marginTop: 4,
+        }}
+      >
+        {plan ? "Save Changes" : "Create Plan"}
+      </button>
+    </div>
+  );
+}
+
+export default function PlanPal() {
+  const [plans, setPlans] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? JSON.parse(saved) : samplePlans;
+    } catch {
+      return samplePlans;
+    }
+  });
+  const [activePlanId, setActivePlanId] = useState(null);
+  const [showPlanForm, setShowPlanForm] = useState(false);
+  const [editingPlan, setEditingPlan] = useState(null);
+  const [showStopForm, setShowStopForm] = useState(false);
+  const [editingStop, setEditingStop] = useState(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(plans));
+    } catch {}
+  }, [plans]);
+
+  const activePlan = plans.find((p) => p.id === activePlanId);
+  const totalSpent = activePlan
+    ? activePlan.stops.reduce((sum, s) => sum + (s.cost || 0), 0)
+    : 0;
+  const confirmedCount = activePlan
+    ? activePlan.stops.filter((s) => s.confirmed).length
+    : 0;
+
+  const handleSavePlan = (plan) => {
+    if (editingPlan) {
+      setPlans(plans.map((p) => (p.id === plan.id ? { ...p, ...plan } : p)));
+    } else {
+      setPlans([...plans, { ...plan, stops: [] }]);
+    }
+    setShowPlanForm(false);
+    setEditingPlan(null);
+    if (!editingPlan) setActivePlanId(plan.id);
+  };
+
+  const handleDeletePlan = (id) => {
+    setPlans(plans.filter((p) => p.id !== id));
+    if (activePlanId === id) setActivePlanId(null);
+  };
+
+  const handleSaveStop = (stop) => {
+    setPlans(
+      plans.map((p) => {
+        if (p.id !== activePlanId) return p;
+        const existingIdx = p.stops.findIndex((s) => s.id === stop.id);
+        if (existingIdx >= 0) {
+          const newStops = [...p.stops];
+          newStops[existingIdx] = stop;
+          return { ...p, stops: newStops };
+        }
+        return { ...p, stops: [...p.stops, stop] };
+      })
+    );
+    setShowStopForm(false);
+    setEditingStop(null);
+  };
+
+  const handleDeleteStop = (stopId) => {
+    setPlans(
+      plans.map((p) =>
+        p.id === activePlanId
+          ? { ...p, stops: p.stops.filter((s) => s.id !== stopId) }
+          : p
+      )
+    );
+  };
+
+  const handleToggleConfirm = (stopId) => {
+    setPlans(
+      plans.map((p) =>
+        p.id === activePlanId
+          ? {
+              ...p,
+              stops: p.stops.map((s) =>
+                s.id === stopId ? { ...s, confirmed: !s.confirmed } : s
+              ),
+            }
+          : p
+      )
+    );
+  };
+
+  const handleShareLink = () => {
+    if (!activePlan) return;
+    const link = getShareLink(activePlan.id);
+    navigator.clipboard.writeText(link).then(() => {
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    });
+  };
+
+  const typeLabels = { date: "Date Night", trip: "Trip", outing: "Outing" };
+  const typeColors = {
+    date: "#C45D3E",
+    trip: "#3E7EC4",
+    outing: "#8A6BC4",
+  };
+
+  return (
+    <div
+      style={{
+        fontFamily: "'DM Sans', sans-serif",
+        background: theme.bg,
+        minHeight: "100vh",
+        color: theme.text,
+      }}
+    >
+      <link
+        href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@400;500;600;700&display=swap"
+        rel="stylesheet"
+      />
+
+      {/* Header */}
+      <div
+        style={{
+          background: theme.dark,
+          color: "#fff",
+          padding: "28px 24px 24px",
+        }}
+      >
+        <div style={{ maxWidth: 600, margin: "0 auto" }}>
+          {activePlan ? (
+            <div>
+              <button
+                onClick={() => setActivePlanId(null)}
+                style={{
+                  background: "rgba(255,255,255,0.1)",
+                  border: "none",
+                  color: "rgba(255,255,255,0.7)",
+                  fontFamily: "'DM Sans', sans-serif",
+                  fontSize: 13,
+                  cursor: "pointer",
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  marginBottom: 12,
+                }}
+              >
+                ← All Plans
+              </button>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <h1
+                    style={{
+                      fontFamily: "'Playfair Display', Georgia, serif",
+                      fontSize: 28,
+                      fontWeight: 700,
+                      margin: "0 0 4px",
+                    }}
+                  >
+                    {activePlan.title}
+                  </h1>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    {activePlan.date && (
+                      <span style={{ fontSize: 14, opacity: 0.7 }}>
+                        {new Date(activePlan.date + "T12:00:00").toLocaleDateString("en-US", {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </span>
+                    )}
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        background: typeColors[activePlan.type] || theme.accent,
+                        padding: "2px 8px",
+                        borderRadius: 4,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.5px",
+                      }}
+                    >
+                      {typeLabels[activePlan.type]}
+                    </span>
+                    {activePlan.shared && (
+                      <span style={{ fontSize: 13, opacity: 0.7 }}>
+                        with {activePlan.sharedWith}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    onClick={() => {
+                      setEditingPlan(activePlan);
+                      setShowPlanForm(true);
+                    }}
+                    style={{
+                      background: "rgba(255,255,255,0.1)",
+                      border: "none",
+                      color: "#fff",
+                      borderRadius: 8,
+                      padding: "6px 10px",
+                      cursor: "pointer",
+                      fontSize: 14,
+                    }}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    onClick={handleShareLink}
+                    style={{
+                      background: "rgba(255,255,255,0.15)",
+                      border: "none",
+                      color: "#fff",
+                      borderRadius: 8,
+                      padding: "6px 12px",
+                      cursor: "pointer",
+                      fontFamily: "'DM Sans', sans-serif",
+                      fontSize: 13,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {copiedLink ? "Copied!" : "Share 🔗"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Stats bar */}
+              <div
+                style={{
+                  display: "flex",
+                  gap: 16,
+                  marginTop: 16,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div style={{ fontSize: 13, opacity: 0.8 }}>
+                  <strong>{activePlan.stops.length}</strong> stops
+                </div>
+                <div style={{ fontSize: 13, opacity: 0.8 }}>
+                  <strong>
+                    {confirmedCount}/{activePlan.stops.length}
+                  </strong>{" "}
+                  confirmed
+                </div>
+                {activePlan.budget > 0 && (
+                  <div
+                    style={{
+                      fontSize: 13,
+                      opacity: 0.8,
+                      color: totalSpent > activePlan.budget ? "#FF8A80" : "inherit",
+                    }}
+                  >
+                    <strong>{formatCurrency(totalSpent)}</strong> /{" "}
+                    {formatCurrency(activePlan.budget)} budget
+                  </div>
+                )}
+                {!activePlan.budget && totalSpent > 0 && (
+                  <div style={{ fontSize: 13, opacity: 0.8 }}>
+                    <strong>{formatCurrency(totalSpent)}</strong> total
+                  </div>
+                )}
+              </div>
+
+              {/* Budget bar */}
+              {activePlan.budget > 0 && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    height: 4,
+                    borderRadius: 2,
+                    background: "rgba(255,255,255,0.15)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      height: "100%",
+                      width: `${Math.min((totalSpent / activePlan.budget) * 100, 100)}%`,
+                      borderRadius: 2,
+                      background:
+                        totalSpent > activePlan.budget
+                          ? "#FF8A80"
+                          : totalSpent > activePlan.budget * 0.8
+                          ? "#FFD54F"
+                          : theme.success,
+                      transition: "width 0.3s ease",
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h1
+                  style={{
+                    fontFamily: "'Playfair Display', Georgia, serif",
+                    fontSize: 28,
+                    fontWeight: 700,
+                    margin: "0 0 2px",
+                  }}
+                >
+                  PlanPal
+                </h1>
+                <p style={{ fontSize: 14, opacity: 0.6, margin: 0 }}>
+                  Every detail, one glance
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setEditingPlan(null);
+                  setShowPlanForm(true);
+                }}
+                style={{
+                  background: theme.accent,
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 10,
+                  padding: "10px 18px",
+                  fontFamily: "'DM Sans', sans-serif",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                + New Plan
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 80px" }}>
+        {!activePlan ? (
+          // Plan list
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {plans.length === 0 && (
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: "60px 20px",
+                  color: theme.textMuted,
+                }}
+              >
+                <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
+                <p style={{ fontSize: 15 }}>
+                  No plans yet. Create your first one to get started.
+                </p>
+              </div>
+            )}
+            {plans.map((plan) => {
+              const spent = plan.stops.reduce((s, st) => s + (st.cost || 0), 0);
+              const confirmed = plan.stops.filter((s) => s.confirmed).length;
+              return (
+                <div
+                  key={plan.id}
+                  onClick={() => setActivePlanId(plan.id)}
+                  style={{
+                    background: theme.card,
+                    borderRadius: 14,
+                    padding: "18px 20px",
+                    boxShadow: theme.shadow,
+                    border: `1px solid ${theme.border}`,
+                    cursor: "pointer",
+                    transition: "all 0.2s ease",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.boxShadow = theme.shadowHover;
+                    e.currentTarget.style.transform = "translateY(-1px)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.boxShadow = theme.shadow;
+                    e.currentTarget.style.transform = "translateY(0)";
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        fontFamily: "'Playfair Display', Georgia, serif",
+                        fontSize: 18,
+                        fontWeight: 600,
+                        marginBottom: 4,
+                      }}
+                    >
+                      {plan.title}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          background: typeColors[plan.type] || theme.accent,
+                          color: "#fff",
+                          padding: "2px 8px",
+                          borderRadius: 4,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.5px",
+                        }}
+                      >
+                        {typeLabels[plan.type]}
+                      </span>
+                      {plan.date && (
+                        <span style={{ fontSize: 13, color: theme.textMuted }}>
+                          {new Date(plan.date + "T12:00:00").toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                      )}
+                      <span style={{ fontSize: 13, color: theme.textMuted }}>
+                        {plan.stops.length} stops
+                      </span>
+                      {plan.shared && (
+                        <span style={{ fontSize: 13, color: theme.textMuted }}>
+                          with {plan.sharedWith}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-end",
+                      gap: 4,
+                    }}
+                  >
+                    {spent > 0 && (
+                      <span
+                        style={{
+                          fontSize: 15,
+                          fontWeight: 600,
+                          color: theme.accent,
+                        }}
+                      >
+                        {formatCurrency(spent)}
+                      </span>
+                    )}
+                    <span style={{ fontSize: 22 }}>→</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          // Plan detail / timeline
+          <div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+              {activePlan.stops.length === 0 && (
+                <div
+                  style={{
+                    textAlign: "center",
+                    padding: "40px 20px",
+                    color: theme.textMuted,
+                  }}
+                >
+                  <div style={{ fontSize: 36, marginBottom: 10 }}>🗓</div>
+                  <p style={{ fontSize: 14 }}>
+                    Add your first stop to start building the timeline.
+                  </p>
+                </div>
+              )}
+              {activePlan.stops.map((stop, i) => (
+                <StopCard
+                  key={stop.id}
+                  stop={stop}
+                  index={i}
+                  total={activePlan.stops.length}
+                  allStops={activePlan.stops}
+                  onEdit={(s) => {
+                    setEditingStop(s);
+                    setShowStopForm(true);
+                  }}
+                  onDelete={handleDeleteStop}
+                  onToggleConfirm={handleToggleConfirm}
+                />
+              ))}
+            </div>
+
+            {/* Add stop button */}
+            <button
+              onClick={() => {
+                setEditingStop(null);
+                setShowStopForm(true);
+              }}
+              style={{
+                width: "100%",
+                marginTop: 20,
+                padding: "14px",
+                background: "transparent",
+                border: `2px dashed ${theme.border}`,
+                borderRadius: 14,
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: 14,
+                fontWeight: 600,
+                color: theme.textMuted,
+                cursor: "pointer",
+                transition: "all 0.15s ease",
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.borderColor = theme.accent;
+                e.target.style.color = theme.accent;
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.borderColor = theme.border;
+                e.target.style.color = theme.textMuted;
+              }}
+            >
+              + Add Stop
+            </button>
+
+            {/* Delete plan */}
+            <button
+              onClick={() => handleDeletePlan(activePlan.id)}
+              style={{
+                display: "block",
+                margin: "24px auto 0",
+                background: "none",
+                border: "none",
+                fontSize: 13,
+                color: theme.textMuted,
+                cursor: "pointer",
+                fontFamily: "'DM Sans', sans-serif",
+                textDecoration: "underline",
+                opacity: 0.6,
+              }}
+            >
+              Delete this plan
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Modals */}
+      <Modal
+        isOpen={showPlanForm}
+        onClose={() => {
+          setShowPlanForm(false);
+          setEditingPlan(null);
+        }}
+        title={editingPlan ? "Edit Plan" : "New Plan"}
+      >
+        <PlanForm
+          plan={editingPlan}
+          onSave={handleSavePlan}
+          onCancel={() => {
+            setShowPlanForm(false);
+            setEditingPlan(null);
+          }}
+        />
+      </Modal>
+
+      <Modal
+        isOpen={showStopForm}
+        onClose={() => {
+          setShowStopForm(false);
+          setEditingStop(null);
+        }}
+        title={editingStop ? "Edit Stop" : "Add Stop"}
+      >
+        <StopForm
+          stop={editingStop}
+          onSave={handleSaveStop}
+          onCancel={() => {
+            setShowStopForm(false);
+            setEditingStop(null);
+          }}
+        />
+      </Modal>
+    </div>
+  );
+}
